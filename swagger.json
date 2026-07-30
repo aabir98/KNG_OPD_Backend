@@ -1,0 +1,164 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Ray's Medical Backend API",
+    "version": "1.0.0",
+    "description": "API documentation for the backend of Ray's Medical web app."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:5000",
+      "description": "Local server"
+    }
+  ],
+  "paths": {
+    "/api/announcement": {
+      "get": {
+        "summary": "Get announcement history",
+        "responses": {
+          "200": {
+            "description": "List of announcements"
+          }
+        }
+      },
+      "post": {
+        "summary": "Set a new announcement",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Announcement saved"
+          }
+        }
+      }
+    },
+    "/api/doctors": {
+      "get": {
+        "summary": "Get all doctors",
+        "responses": {
+          "200": {
+            "description": "List of doctors"
+          }
+        }
+      },
+      "post": {
+        "summary": "Add a new doctor",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "specialty": { "type": "string" },
+                  "description": { "type": "string" },
+                  "experience": { "type": "string" },
+                  "image": { "type": "string", "format": "binary" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Doctor added successfully"
+          }
+        }
+      }
+    },
+    "/api/admin/bookings": {
+      "get": {
+        "summary": "Get all bookings (Admin)",
+        "responses": {
+          "200": {
+            "description": "List of all bookings"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update a booking status/date",
+        "responses": {
+          "200": {
+            "description": "Booking updated"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a booking",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Booking deleted"
+          }
+        }
+      }
+    },
+    "/api/tests": {
+      "get": {
+        "summary": "Get all pathology tests",
+        "responses": {
+          "200": {
+            "description": "List of tests"
+          }
+        }
+      }
+    },
+    "/api/gallery": {
+      "get": {
+        "summary": "Get gallery items",
+        "responses": {
+          "200": {
+            "description": "List of gallery images"
+          }
+        }
+      }
+    },
+    "/api/blog": {
+      "get": {
+        "summary": "Get blog posts from Google Sheets",
+        "responses": {
+          "200": {
+            "description": "List of blogs"
+          }
+        }
+      }
+    },
+    "/api/users": {
+      "get": {
+        "summary": "Get all users or a specific user by phone",
+        "responses": {
+          "200": {
+            "description": "User details"
+          }
+        }
+      },
+      "post": {
+        "summary": "Register or login a user",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    }
+  }
+}
