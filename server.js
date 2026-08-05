@@ -8,7 +8,7 @@ const swaggerUi = require('swagger-ui-express');
 const swaggerDocument = require('./swagger.json');
 
 const app = express();
-const port = 5000;
+const port = 5001;
 
 app.use(cors());
 app.use(express.json());
@@ -42,6 +42,26 @@ async function writeJson(filename, data) {
     await fs.writeFile(path.join(DATA_DIR, filename), JSON.stringify(data, null, 2), 'utf-8');
 }
 
+async function addUserNotification(phone, type, title, message) {
+    try {
+        const notifications = await readJson('user_notifications.json');
+        const newNotif = {
+            id: crypto.randomUUID(),
+            phone,
+            type,
+            title,
+            message,
+            createdAt: new Date().toISOString(),
+            isRead: false,
+            readBy: []
+        };
+        notifications.unshift(newNotif);
+        await writeJson('user_notifications.json', notifications);
+    } catch (error) {
+        console.error("Error saving user notification:", error);
+    }
+}
+
 // ---------------------------------------------------------
 // ROOT / DOCUMENTATION ROUTE
 // ---------------------------------------------------------
@@ -58,19 +78,117 @@ app.get('/', (req, res) => {
             bookings: "/api/admin/bookings (GET, PATCH, DELETE)",
             users: "/api/users (GET, POST)",
             tests: "/api/tests (GET, POST, PATCH, DELETE)",
-            gallery: "/api/gallery (GET, POST, PATCH, DELETE)",
-            blog: "/api/blog (GET)"
+            medicines: "/api/medicines (GET, POST, PATCH, DELETE)",
+            notifications: "/api/notifications (GET, POST, PATCH)",
+            userNotifications: "/api/user/notifications (GET, POST)"
         }
     });
 });
 
 // ---------------------------------------------------------
-// ANNOUNCEMENT ROUTES
+// USER NOTIFICATIONS ROUTE
+// ---------------------------------------------------------
+app.get('/api/user/notifications', async (req, res) => {
+    try {
+        const { phone } = req.query;
+        let notifications = await readJson('user_notifications.json');
+        
+        // Filter: global ("all") OR matching phone
+        notifications = notifications.filter(n => {
+            const isTarget = n.phone === 'all' || (phone && n.phone === phone);
+            const isCleared = n.clearedBy && n.clearedBy.includes(phone || 'guest');
+            return isTarget && !isCleared;
+        });
+        
+        // Sort newest first
+        notifications.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        
+        res.json({ success: true, notifications });
+    } catch (error) {
+        console.error("Error fetching user notifications:", error);
+        res.status(500).json({ success: false, message: 'Failed to fetch user notifications' });
+    }
+});
+
+app.post('/api/user/notifications/read', async (req, res) => {
+    try {
+        const { id, phone } = req.body;
+        if (!id || !phone) return res.status(400).json({ success: false, message: 'Missing id or phone' });
+        
+        let notifications = await readJson('user_notifications.json');
+        let index = notifications.findIndex(n => n.id === id);
+        
+        if (index !== -1) {
+            if (notifications[index].phone === 'all') {
+                if (!notifications[index].readBy) notifications[index].readBy = [];
+                if (!notifications[index].readBy.includes(phone)) {
+                    notifications[index].readBy.push(phone);
+                }
+            } else {
+                notifications[index].isRead = true;
+            }
+            await writeJson('user_notifications.json', notifications);
+        }
+        
+        res.json({ success: true });
+    } catch (error) {
+        console.error("Error marking notification as read:", error);
+        res.status(500).json({ success: false, message: 'Failed to update notification' });
+    }
+});
+
+// ---------------------------------------------------------
+app.post('/api/user/notifications/clear', async (req, res) => {
+    try {
+        const { id, phone, clearAll } = req.body;
+        if (!phone) return res.status(400).json({ success: false, message: 'Missing phone' });
+        
+        let notifications = await readJson('user_notifications.json');
+        
+        if (clearAll) {
+            // Clear all notifications for this phone
+            notifications = notifications.filter(n => {
+                if (n.phone === 'all') {
+                    if (!n.clearedBy) n.clearedBy = [];
+                    if (!n.clearedBy.includes(phone)) n.clearedBy.push(phone);
+                    return true; // Keep the global one, but we marked it cleared
+                } else if (n.phone === phone) {
+                    return false; // Remove personal notification
+                }
+                return true;
+            });
+        } else if (id) {
+            const index = notifications.findIndex(n => n.id === id);
+            if (index !== -1) {
+                if (notifications[index].phone === 'all') {
+                    if (!notifications[index].clearedBy) notifications[index].clearedBy = [];
+                    if (!notifications[index].clearedBy.includes(phone)) notifications[index].clearedBy.push(phone);
+                } else if (notifications[index].phone === phone) {
+                    notifications.splice(index, 1);
+                }
+            }
+        }
+        
+        await writeJson('user_notifications.json', notifications);
+        res.json({ success: true });
+    } catch (error) {
+        console.error("Error clearing notification(s):", error);
+        res.status(500).json({ success: false, message: 'Failed to clear notifications' });
+    }
+});
+
+// ---------------------------------------------------------
+// ANNOUNCEMENT ROUTE
 // ---------------------------------------------------------
 app.get('/api/announcement', async (req, res) => {
     try {
         const announcements = await readJson('announcements.json');
-        res.json({ success: true, announcements });
+        if (req.query.all === 'true') {
+            res.json({ success: true, announcements });
+        } else {
+            const activeOnly = announcements.filter(a => a.isActive !== false);
+            res.json({ success: true, announcements: activeOnly });
+        }
     } catch (error) {
         res.status(500).json({ success: false, message: 'Failed to read announcements' });
     }
@@ -85,14 +203,121 @@ app.post('/api/announcement', async (req, res) => {
         const newAnnouncement = {
             id: crypto.randomUUID(),
             text,
+            isActive: true,
             createdAt: new Date().toISOString()
         };
 
         announcements.unshift(newAnnouncement);
         await writeJson('announcements.json', announcements);
+        
+        await addUserNotification('all', 'announcement', 'New Announcement', text);
+        
         res.json({ success: true, announcement: newAnnouncement, announcements });
     } catch (error) {
         res.status(500).json({ success: false, message: 'Failed to update announcement' });
+    }
+});
+
+app.patch('/api/announcement', async (req, res) => {
+    try {
+        const { id, text, isActive } = req.body;
+        if (!id) return res.status(400).json({ success: false, message: 'ID is required' });
+
+        let announcements = await readJson('announcements.json');
+        const index = announcements.findIndex(a => a.id === id);
+        if (index === -1) return res.status(404).json({ success: false, message: 'Announcement not found' });
+
+        if (text !== undefined) announcements[index].text = text;
+        if (isActive !== undefined) announcements[index].isActive = isActive;
+
+        await writeJson('announcements.json', announcements);
+        res.json({ success: true, announcement: announcements[index], announcements });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to patch announcement' });
+    }
+});
+
+app.delete('/api/announcement', async (req, res) => {
+    try {
+        const id = req.query.id || req.body.id;
+        if (!id) return res.status(400).json({ success: false, message: 'ID is required' });
+
+        let announcements = await readJson('announcements.json');
+        announcements = announcements.filter(a => a.id !== id);
+        await writeJson('announcements.json', announcements);
+        res.json({ success: true, announcements });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to delete announcement' });
+    }
+});
+
+// ---------------------------------------------------------
+// NOTIFICATION ROUTES
+// ---------------------------------------------------------
+const addNotification = async ({ type, title, message, details }) => {
+    try {
+        let notifications = await readJson('notifications.json');
+        const newNotification = {
+            id: crypto.randomUUID(),
+            type, // "doctor_appointment" | "pathology_test" | "medicine_order"
+            title,
+            message,
+            details: details || {},
+            isRead: false,
+            createdAt: new Date().toISOString()
+        };
+        notifications.unshift(newNotification);
+        await writeJson('notifications.json', notifications);
+        return newNotification;
+    } catch (e) {
+        console.error("Error adding notification:", e);
+    }
+};
+
+app.get('/api/notifications', async (req, res) => {
+    try {
+        const notifications = await readJson('notifications.json');
+        const unreadCount = notifications.filter(n => !n.isRead).length;
+        res.json({ success: true, notifications, unreadCount });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to fetch notifications' });
+    }
+});
+
+app.patch('/api/notifications/read', async (req, res) => {
+    try {
+        const { id, markAll } = req.body;
+        let notifications = await readJson('notifications.json');
+        
+        if (markAll) {
+            notifications = notifications.map(n => ({ ...n, isRead: true }));
+        } else if (id) {
+            notifications = notifications.map(n => n.id === id ? { ...n, isRead: true } : n);
+        }
+        
+        await writeJson('notifications.json', notifications);
+        const unreadCount = notifications.filter(n => !n.isRead).length;
+        res.json({ success: true, notifications, unreadCount });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to update notification' });
+    }
+});
+
+app.delete('/api/notifications', async (req, res) => {
+    try {
+        const { id, deleteAll } = req.query;
+        let notifications = await readJson('notifications.json');
+        
+        if (deleteAll === 'true') {
+            notifications = [];
+        } else if (id) {
+            notifications = notifications.filter(n => n.id !== id);
+        }
+        
+        await writeJson('notifications.json', notifications);
+        res.json({ success: true, notifications, unreadCount: 0 });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to delete notification' });
     }
 });
 
@@ -221,9 +446,13 @@ app.delete('/api/doctors', async (req, res) => {
 // ---------------------------------------------------------
 // SUBMIT ROUTE (Google Sheets integration)
 // ---------------------------------------------------------
-app.post('/api/submit', async (req, res) => {
+app.post('/api/submit', upload.single('prescription'), async (req, res) => {
     try {
-        const data = req.body;
+        let data = req.body;
+        if (typeof req.body.bookingData === 'string') {
+            try { data = JSON.parse(req.body.bookingData); } catch (e) {}
+        }
+        
         const timestamp = new Date().toISOString();
         const GOOGLE_SHEET_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbzpYuGb1FPCr3JU_AZHOXzJaRt6gupkw9NX3w9Xr4I4_2O4xGBIF_G9-loZ7OGqQd5T/exec";
         
@@ -242,15 +471,48 @@ app.post('/api/submit', async (req, res) => {
             }
         }
 
+        let prescriptionUrl = data.prescriptionUrl || "";
+        if (req.file) {
+            const uploadDir = path.join(PUBLIC_DIR, 'prescriptions');
+            await fs.mkdir(uploadDir, { recursive: true });
+            const ext = req.file.originalname.split('.').pop() || 'png';
+            const filename = `presc_${bookingNumber}_${Date.now()}.${ext}`;
+            const filePath = path.join(uploadDir, filename);
+            await fs.copyFile(req.file.path, filePath);
+            await fs.unlink(req.file.path);
+            prescriptionUrl = `/prescriptions/${filename}`;
+        }
+
         const newBooking = {
             id: crypto.randomUUID(),
             bookingNumber,
             ...data,
+            prescriptionUrl,
             createdAt: timestamp,
         };
 
         bookings.push(newBooking);
         await writeJson('bookings.json', bookings);
+
+        // Send admin notification
+        if (isPathology) {
+            await addNotification({
+                type: "pathology_test",
+                title: "New Pathology Test Booking",
+                message: `Patient ${data.name || 'User'} requested Home Collection for ${data.date || 'a date'} (${data.timeSlot || ''}). Phone: ${data.phone || 'N/A'}`,
+                details: { bookingNumber, name: data.name, date: data.date, timeSlot: data.timeSlot, phone: data.phone }
+            });
+        } else {
+            const docName = data.doctor ? (data.doctor.startsWith("Dr.") ? data.doctor : `Dr. ${data.doctor}`) : "a doctor";
+            await addNotification({
+                type: "doctor_appointment",
+                title: "New Doctor Appointment",
+                message: `Patient ${data.name || 'User'} booked ${docName} for ${data.date || 'a date'}. Phone: ${data.phone || 'N/A'}`,
+                details: { bookingNumber, name: data.name, doctor: data.doctor, date: data.date, phone: data.phone }
+            });
+        }
+        
+        await addUserNotification(data.userPhone || data.phone || 'all', 'order_placed', 'Booking Confirmed', `Your ${isPathology ? 'Pathology' : 'Doctor'} booking (${bookingNumber}) has been confirmed.`);
 
         try {
             const response = await fetch(GOOGLE_SHEET_WEBHOOK_URL, {
@@ -301,11 +563,21 @@ app.get('/api/admin/bookings', async (req, res) => {
 app.get('/api/bookings', async (req, res) => {
     try {
         const email = req.query.email;
+        const phone = req.query.phone;
         const id = req.query.id;
         const bookings = await readJson('bookings.json');
+        
         let filtered = bookings;
-        if (email) filtered = bookings.filter(b => b.userEmail === email);
-        if (id) filtered = bookings.filter(b => b.id === id);
+        if (id) {
+            filtered = bookings.filter(b => b.id === id);
+        } else if (email && email !== 'undefined' && phone && phone !== 'undefined') {
+            filtered = bookings.filter(b => b.userEmail === email || b.userPhone === phone || b.phone === phone);
+        } else if (email && email !== 'undefined') {
+            filtered = bookings.filter(b => b.userEmail === email);
+        } else if (phone && phone !== 'undefined') {
+            filtered = bookings.filter(b => b.userPhone === phone || b.phone === phone);
+        }
+
         res.json({ success: true, bookings: filtered });
     } catch (error) {
         res.status(500).json({ success: false, message: "Error retrieving bookings" });
@@ -328,8 +600,8 @@ app.delete('/api/bookings', async (req, res) => {
 
 app.patch('/api/admin/bookings', async (req, res) => {
     try {
-        const { id, newDate, status } = req.body;
-        if (!id || (!newDate && !status)) return res.status(400).json({ success: false, message: "Missing fields" });
+        const { id, newDate, status, selectedTests } = req.body;
+        if (!id) return res.status(400).json({ success: false, message: "Missing id" });
 
         let bookings = await readJson('bookings.json');
         let found = false;
@@ -337,13 +609,26 @@ app.patch('/api/admin/bookings', async (req, res) => {
         bookings = bookings.map(b => {
             if (b.id === id) {
                 found = true;
-                return { ...b, ...(newDate && { date: newDate }), ...(status && { status }) };
+                return { 
+                    ...b, 
+                    ...(newDate && { date: newDate }), 
+                    ...(status && { status }),
+                    ...(selectedTests !== undefined && { selectedTests })
+                };
             }
             return b;
         });
 
         if (!found) return res.status(404).json({ success: false, message: "Booking not found" });
         await writeJson('bookings.json', bookings);
+
+        if (status === 'Completed') {
+            const booking = bookings.find(b => b.id === id);
+            if (booking) {
+                await addUserNotification(booking.userPhone || booking.phone || 'all', 'order_completed', 'Booking Completed', `Your booking (${id}) has been completed.`);
+            }
+        }
+
         res.json({ success: true, message: "Booking updated" });
     } catch (error) {
         res.status(500).json({ success: false, message: "Error updating booking" });
@@ -502,10 +787,10 @@ app.get('/api/reviews', async (req, res) => {
 
 app.post('/api/reviews', async (req, res) => {
     try {
-        const { bookingId, doctorName, patientName, patientEmail, rating, text, type } = req.body;
+        const { bookingId, doctorName, patientName, patientEmail, patientPhone, rating, text, type } = req.body;
         const reviewType = type || 'Doctor';
 
-        if (!bookingId || !patientEmail || rating === undefined) {
+        if (!bookingId || (!patientEmail && !patientPhone) || rating === undefined) {
             return res.status(400).json({ success: false, message: "Missing required review fields" });
         }
         if (reviewType === 'Doctor' && !doctorName) {
@@ -526,6 +811,7 @@ app.post('/api/reviews', async (req, res) => {
             doctorName: doctorName || null,
             patientName,
             patientEmail,
+            patientPhone,
             rating,
             text: text || "",
             createdAt: new Date().toISOString()
@@ -547,10 +833,11 @@ app.patch('/api/reviews', async (req, res) => {
         let reviews = await readJson('reviews.json');
         const idx = reviews.findIndex(r => r.id === id);
         if (idx === -1) return res.status(404).json({ success: false, message: "Review not found" });
-        
         if (text !== undefined) reviews[idx].text = text;
-        if (featured !== undefined) reviews[idx].featured = featured === 'true' || featured === true;
-        
+        if (featured !== undefined) {
+            const isFeatured = featured === 'true' || featured === true;
+            reviews[idx].featured = isFeatured;
+        }
         await writeJson('reviews.json', reviews);
         res.json({ success: true, review: reviews[idx] });
     } catch (error) {
@@ -634,12 +921,118 @@ app.delete('/api/tests', async (req, res) => {
 });
 
 // ---------------------------------------------------------
+// MEDICINES ROUTE
+// ---------------------------------------------------------
+app.get('/api/medicines', async (req, res) => {
+    try {
+        const medicines = await readJson('medicines.json');
+        res.json(medicines);
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Failed to read medicines" });
+    }
+});
+
+app.post('/api/medicines', upload.single('image'), async (req, res) => {
+    try {
+        const { name, price, category, originalPrice, description, inStock, isPrescriptionRequired } = req.body;
+        let imageurl = req.body.imageurl;
+
+        if (req.file) {
+            const uploadDir = path.join(PUBLIC_DIR, 'medicines');
+            await fs.mkdir(uploadDir, { recursive: true });
+            const ext = req.file.originalname.split('.').pop() || 'png';
+            const filename = `med_${Date.now()}.${ext}`;
+            const filePath = path.join(uploadDir, filename);
+            await fs.copyFile(req.file.path, filePath);
+            await fs.unlink(req.file.path);
+            imageurl = `/medicines/${filename}`;
+        }
+
+        const medicines = await readJson('medicines.json');
+        const newMedicine = {
+            id: crypto.randomUUID(),
+            name,
+            price: Number(price) || 0,
+            originalPrice: originalPrice ? Number(originalPrice) : undefined,
+            category: category || "General Care",
+            description: description || "",
+            inStock: inStock !== 'false' && inStock !== false,
+            isPrescriptionRequired: isPrescriptionRequired === 'true' || isPrescriptionRequired === true,
+            imageurl: imageurl || '',
+            createdAt: new Date().toISOString()
+        };
+
+        medicines.unshift(newMedicine);
+        await writeJson('medicines.json', medicines);
+        res.json({ success: true, medicine: newMedicine });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Failed to add medicine" });
+    }
+});
+
+app.patch('/api/medicines', upload.single('image'), async (req, res) => {
+    try {
+        const { id, name, price, category, originalPrice, description, inStock, isPrescriptionRequired } = req.body;
+        if (!id) return res.status(400).json({ success: false, message: "Medicine ID required" });
+
+        const medicines = await readJson('medicines.json');
+        const idx = medicines.findIndex(m => m.id === id);
+        if (idx === -1) return res.status(404).json({ success: false, message: "Medicine not found" });
+        
+        let med = medicines[idx];
+        if (name !== undefined) med.name = name;
+        if (price !== undefined) med.price = Number(price) || 0;
+        if (originalPrice !== undefined) med.originalPrice = originalPrice ? Number(originalPrice) : undefined;
+        if (category !== undefined) med.category = category;
+        if (description !== undefined) med.description = description;
+        if (inStock !== undefined) med.inStock = inStock === 'true' || inStock === true;
+        if (isPrescriptionRequired !== undefined) med.isPrescriptionRequired = isPrescriptionRequired === 'true' || isPrescriptionRequired === true;
+
+        if (req.file) {
+            const uploadDir = path.join(PUBLIC_DIR, 'medicines');
+            await fs.mkdir(uploadDir, { recursive: true });
+            const ext = req.file.originalname.split('.').pop() || 'png';
+            const filename = `med_${Date.now()}.${ext}`;
+            const filePath = path.join(uploadDir, filename);
+            await fs.copyFile(req.file.path, filePath);
+            await fs.unlink(req.file.path);
+            med.imageurl = `/medicines/${filename}`;
+        }
+        
+        medicines[idx] = med;
+        await writeJson('medicines.json', medicines);
+        res.json({ success: true, medicine: med });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Failed to update medicine" });
+    }
+});
+
+app.delete('/api/medicines', async (req, res) => {
+    try {
+        const id = req.query.id;
+        if (!id) return res.status(400).json({ success: false, message: "Medicine ID required" });
+        
+        let medicines = await readJson('medicines.json');
+        medicines = medicines.filter(m => m.id !== id);
+        await writeJson('medicines.json', medicines);
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Failed to delete medicine" });
+    }
+});
+
+// ---------------------------------------------------------
 // GALLERY ROUTE
 // ---------------------------------------------------------
 app.get('/api/gallery', async (req, res) => {
     try {
         const items = await readJson('gallery.json');
-        res.json(items);
+        const normalized = items.map(item => ({
+            ...item,
+            src: item.src || item.imageurl || '',
+            imageurl: item.imageurl || item.src || ''
+        }));
+        res.json(normalized);
     } catch (error) {
         res.status(500).json({ success: false, message: "Failed to read gallery" });
     }
@@ -648,7 +1041,7 @@ app.get('/api/gallery', async (req, res) => {
 app.post('/api/gallery', upload.single('image'), async (req, res) => {
     try {
         const { title, description } = req.body;
-        let imageurl = req.body.imageurl;
+        let imageurl = req.body.imageurl || req.body.src;
 
         if (req.file) {
             const uploadDir = path.join(PUBLIC_DIR, 'gallery');
@@ -661,12 +1054,14 @@ app.post('/api/gallery', upload.single('image'), async (req, res) => {
             imageurl = `/gallery/${filename}`;
         }
 
+        const finalUrl = imageurl || '';
         const items = await readJson('gallery.json');
         const newItem = {
             id: crypto.randomUUID(),
-            title,
+            title: title || '',
             description: description || '',
-            imageurl: imageurl || '',
+            imageurl: finalUrl,
+            src: finalUrl,
             createdAt: new Date().toISOString()
         };
 
@@ -688,7 +1083,7 @@ app.patch('/api/gallery', upload.single('image'), async (req, res) => {
         if (idx === -1) return res.status(404).json({ success: false, message: "Item not found" });
         
         let item = items[idx];
-        if (title) item.title = title;
+        if (title !== undefined) item.title = title;
         if (description !== undefined) item.description = description;
 
         if (req.file) {
@@ -699,7 +1094,12 @@ app.patch('/api/gallery', upload.single('image'), async (req, res) => {
             const filePath = path.join(uploadDir, filename);
             await fs.copyFile(req.file.path, filePath);
             await fs.unlink(req.file.path);
-            item.imageurl = `/gallery/${filename}`;
+            const newUrl = `/gallery/${filename}`;
+            item.imageurl = newUrl;
+            item.src = newUrl;
+        } else {
+            item.src = item.src || item.imageurl || '';
+            item.imageurl = item.imageurl || item.src || '';
         }
         
         items[idx] = item;
@@ -721,6 +1121,615 @@ app.delete('/api/gallery', async (req, res) => {
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ success: false, message: "Failed to delete gallery item" });
+    }
+});
+// ---------------------------------------------------------
+// EVENTS ROUTES
+// ---------------------------------------------------------
+app.get('/api/events', async (req, res) => {
+    try {
+        const items = await readJson('events.json');
+        res.json(items);
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Failed to fetch events" });
+    }
+});
+
+app.post('/api/events', upload.array('images', 10), async (req, res) => {
+    try {
+        const { title, date, details } = req.body;
+        
+        let imageUrls = [];
+        if (req.files && req.files.length > 0) {
+            const uploadDir = path.join(PUBLIC_DIR, 'events');
+            await fs.mkdir(uploadDir, { recursive: true });
+            
+            for (let i = 0; i < req.files.length; i++) {
+                const file = req.files[i];
+                const filename = Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname);
+                const filePath = path.join(uploadDir, filename);
+                await fs.rename(file.path, filePath);
+                imageUrls.push(`/events/${filename}`);
+            }
+        }
+        
+        const newItem = {
+            id: crypto.randomUUID(),
+            title,
+            date,
+            details,
+            images: imageUrls,
+            createdAt: new Date().toISOString()
+        };
+        
+        let items = await readJson('events.json');
+        items.unshift(newItem);
+        await writeJson('events.json', items);
+        
+        await addUserNotification('all', 'event', 'New Event', title);
+        
+        res.json({ success: true, event: newItem });
+    } catch (error) {
+        console.error("Error in POST /api/events:", error);
+        res.status(500).json({ success: false, message: "Failed to add event", error: error.message });
+    }
+});
+
+app.patch('/api/events', upload.array('images', 10), async (req, res) => {
+    try {
+        const { id, title, date, details, keepImages } = req.body;
+        
+        let items = await readJson('events.json');
+        const index = items.findIndex(i => i.id === id);
+        
+        if (index === -1) {
+            return res.status(404).json({ success: false, message: "Event not found" });
+        }
+
+        // Process retained images from existing ones
+        let finalImages = [];
+        let keepArray = [];
+        if (keepImages) {
+            try { keepArray = JSON.parse(keepImages); } catch (e) { keepArray = typeof keepImages === 'string' ? [keepImages] : keepImages || []; }
+        }
+        
+        const existingImages = items[index].images || [];
+        for (const oldImg of existingImages) {
+            if (keepArray.includes(oldImg)) {
+                finalImages.push(oldImg);
+            } else {
+                try {
+                    const oldPath = path.join(PUBLIC_DIR, oldImg.replace('/events/', 'events/'));
+                    await fs.unlink(oldPath);
+                } catch (e) {}
+            }
+        }
+        
+        // Add new images
+        if (req.files && req.files.length > 0) {
+            const uploadDir = path.join(PUBLIC_DIR, 'events');
+            await fs.mkdir(uploadDir, { recursive: true });
+            
+            for (let i = 0; i < req.files.length; i++) {
+                const file = req.files[i];
+                const filename = Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname);
+                const filePath = path.join(uploadDir, filename);
+                await fs.rename(file.path, filePath);
+                finalImages.push(`/events/${filename}`);
+            }
+        }
+        
+        items[index] = { ...items[index], title, date, details, images: finalImages };
+        await writeJson('events.json', items);
+        
+        res.json({ success: true, event: items[index] });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Failed to update event" });
+    }
+});
+
+app.delete('/api/events', async (req, res) => {
+    try {
+        const { id } = req.query;
+        let items = await readJson('events.json');
+        const event = items.find(i => i.id === id);
+        
+        if (event && event.images) {
+            for (const img of event.images) {
+                try {
+                    const imgPath = path.join(PUBLIC_DIR, img.replace('/events/', 'events/'));
+                    await fs.unlink(imgPath);
+                } catch (e) {}
+            }
+        }
+        
+        items = items.filter(i => i.id !== id);
+        await writeJson('events.json', items);
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Failed to delete event" });
+    }
+});
+
+// ---------------------------------------------------------
+// MEDICINE ORDERS ROUTES
+// ---------------------------------------------------------
+app.post('/api/medicine-orders', upload.single('prescription'), async (req, res) => {
+    try {
+        let orderData = req.body;
+        if (typeof req.body.orderData === 'string') {
+            try { orderData = JSON.parse(req.body.orderData); } catch (e) {}
+        }
+        
+        let orders = await readJson('medicine_orders.json');
+        
+        // Generate a unique order number
+        let orderNumber = "";
+        let isUnique = false;
+        while (!isUnique) {
+            const randomNumber = Math.floor(1000 + Math.random() * 9000).toString();
+            orderNumber = "RAY-MED-" + randomNumber;
+            if (!orders.some(o => o.id === orderNumber)) {
+                isUnique = true;
+            }
+        }
+
+        let prescriptionUrl = orderData.prescriptionUrl || "";
+        if (req.file) {
+            const uploadDir = path.join(PUBLIC_DIR, 'prescriptions');
+            await fs.mkdir(uploadDir, { recursive: true });
+            const ext = req.file.originalname.split('.').pop() || 'png';
+            const filename = `presc_${orderNumber}_${Date.now()}.${ext}`;
+            const filePath = path.join(uploadDir, filename);
+            await fs.copyFile(req.file.path, filePath);
+            await fs.unlink(req.file.path);
+            prescriptionUrl = `/prescriptions/${filename}`;
+        }
+
+        const newOrder = {
+            id: orderNumber,
+            ...orderData,
+            prescriptionUrl: prescriptionUrl,
+            status: "Placed",
+            createdAt: new Date().toISOString()
+        };
+
+        orders.unshift(newOrder);
+        await writeJson('medicine_orders.json', orders);
+        
+        await addNotification({
+            type: "medicine_order",
+            title: "New Medicine Order",
+            message: `Order #${orderNumber}: ${newOrder.patientDetails?.name || 'User'} ordered ${newOrder.items?.length || 0} item(s) • Total ₹${newOrder.finalAmount || newOrder.subtotal || 0}.${prescriptionUrl ? ' (Prescription Attached)' : ''} Phone: ${newOrder.patientDetails?.phone || newOrder.userPhone || 'N/A'}`,
+            details: { orderId: orderNumber, name: newOrder.patientDetails?.name, total: newOrder.finalAmount || newOrder.subtotal, phone: newOrder.patientDetails?.phone, hasPrescription: !!prescriptionUrl }
+        });
+
+        const userPhone = newOrder.userPhone || newOrder.patientDetails?.phone || 'all';
+        await addUserNotification(userPhone, 'order_placed', 'Medicine Order Placed', `Your medicine order (#${orderNumber}) has been placed successfully.`);
+
+        res.json({ success: true, order: newOrder });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: 'Failed to place medicine order' });
+    }
+});
+
+app.get('/api/medicine-orders', async (req, res) => {
+    try {
+        const phone = req.query.phone;
+        let orders = await readJson('medicine_orders.json');
+        
+        if (phone) {
+            orders = orders.filter(o => (o.userPhone === phone || (o.patientDetails && o.patientDetails.phone === phone)) && o.status !== 'Deleted');
+        }
+        
+        res.json(orders);
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Failed to fetch medicine orders" });
+    }
+});
+
+app.put('/api/medicine-orders', async (req, res) => {
+    try {
+        const { id, status } = req.body;
+        if (!id || !status) return res.status(400).json({ success: false, message: 'Missing id or status' });
+        
+        let orders = await readJson('medicine_orders.json');
+        const index = orders.findIndex(o => o.id === id);
+        if (index !== -1) {
+            orders[index].status = status;
+            await writeJson('medicine_orders.json', orders);
+
+            if (status === 'Completed' || status === 'Delivered') {
+                const userPhone = orders[index].userPhone || orders[index].patientDetails?.phone || 'all';
+                await addUserNotification(userPhone, 'order_completed', 'Order Delivered', `Your medicine order (#${id}) has been marked as ${status}.`);
+            }
+
+            res.json({ success: true, order: orders[index] });
+        } else {
+            res.status(404).json({ success: false, message: 'Order not found' });
+        }
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to update order' });
+    }
+});
+
+app.delete('/api/medicine-orders', async (req, res) => {
+    try {
+        const { id, permanent } = req.query;
+        if (!id) return res.status(400).json({ success: false, message: 'Missing id' });
+
+        let orders = await readJson('medicine_orders.json');
+        const index = orders.findIndex(o => o.id === id);
+
+        if (index === -1) {
+            return res.status(404).json({ success: false, message: 'Order not found' });
+        }
+
+        if (permanent === 'true' || permanent === true) {
+            orders = orders.filter(o => o.id !== id);
+            await writeJson('medicine_orders.json', orders);
+            return res.json({ success: true, message: 'Order permanently deleted' });
+        }
+
+        // Soft delete to recycle bin
+        orders[index].previousStatus = (orders[index].status && orders[index].status !== 'Deleted') ? orders[index].status : 'Placed';
+        orders[index].status = 'Deleted';
+
+        await writeJson('medicine_orders.json', orders);
+        res.json({ success: true, message: 'Order moved to recycle bin' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to delete order' });
+    }
+});
+
+app.post('/api/medicine-orders/restore', async (req, res) => {
+    try {
+        const { id } = req.body;
+        if (!id) return res.status(400).json({ success: false, message: 'Missing id' });
+
+        let orders = await readJson('medicine_orders.json');
+        const index = orders.findIndex(o => o.id === id);
+
+        if (index === -1) {
+            return res.status(404).json({ success: false, message: 'Order not found' });
+        }
+
+        const restoredStatus = orders[index].previousStatus || 'Placed';
+        orders[index].status = restoredStatus;
+        delete orders[index].previousStatus;
+
+        await writeJson('medicine_orders.json', orders);
+        res.json({ success: true, message: 'Order restored successfully', order: orders[index] });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to restore order' });
+    }
+});
+
+app.post('/api/medicine-orders/upload', upload.single('bill'), async (req, res) => {
+    try {
+        const { id } = req.body;
+        if (!id || !req.file) return res.status(400).json({ success: false, message: "Missing id or file" });
+
+        const uploadDir = path.join(PUBLIC_DIR, 'uploads');
+        await fs.mkdir(uploadDir, { recursive: true });
+
+        const ext = req.file.originalname.split('.').pop() || 'pdf';
+        const filename = `bill-${id}-${Date.now()}.${ext}`;
+        const filePath = path.join(uploadDir, filename);
+
+        await fs.copyFile(req.file.path, filePath);
+        await fs.unlink(req.file.path);
+
+        const billUrl = `/uploads/${filename}`;
+
+        let orders = await readJson('medicine_orders.json');
+        const index = orders.findIndex(o => o.id === id);
+        if (index !== -1) {
+            orders[index].billUrl = billUrl;
+            await writeJson('medicine_orders.json', orders);
+            res.json({ success: true, billUrl });
+        } else {
+            res.status(404).json({ success: false, message: 'Order not found' });
+        }
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Error uploading bill" });
+    }
+});
+
+// ==================== COUPONS API ====================
+
+const syncCouponToAnnouncement = async (coupon, serviceName) => {
+    try {
+        if (!coupon || !coupon.code) return;
+        const codeUpper = coupon.code.toUpperCase();
+        const discNum = Number(coupon.discount) || 0;
+        const discStr = coupon.discountType === 'percentage' ? `${discNum}% OFF` : `₹${discNum} OFF`;
+        
+        let desc = coupon.description;
+        if (!desc) {
+            desc = `${codeUpper}: Get ${discStr} on ${serviceName}!`;
+            const details = [];
+            if (coupon.minOrder) details.push(`Min Order ₹${coupon.minOrder}`);
+            if (coupon.discountType === 'percentage' && coupon.maxDiscount) details.push(`Max Discount ₹${coupon.maxDiscount}`);
+            if (coupon.validTo) details.push(`Valid till ${coupon.validTo}`);
+            if (details.length > 0) desc += ` (${details.join(', ')})`;
+        } else if (!desc.toUpperCase().startsWith(codeUpper)) {
+            desc = `${codeUpper}: ${desc}`;
+        }
+
+        let announcements = await readJson('announcements.json');
+        
+        const idx = announcements.findIndex(a => 
+            (a.couponId && a.couponId === coupon.id) || 
+            (a.couponCode && a.couponCode === codeUpper) ||
+            (a.text && a.text.toUpperCase().startsWith(codeUpper))
+        );
+
+        const isActiveState = coupon.isActive !== false;
+
+        if (idx !== -1) {
+            announcements[idx].text = desc;
+            announcements[idx].isActive = isActiveState;
+            announcements[idx].couponId = coupon.id;
+            announcements[idx].couponCode = codeUpper;
+        } else if (isActiveState) {
+            announcements.unshift({
+                id: crypto.randomUUID(),
+                couponId: coupon.id,
+                couponCode: codeUpper,
+                text: desc,
+                isActive: true,
+                createdAt: new Date().toISOString()
+            });
+        }
+
+        await writeJson('announcements.json', announcements);
+    } catch (e) {
+        console.error("Error syncing coupon to announcement:", e);
+    }
+};
+
+const deleteCouponAnnouncement = async (couponId, couponCode) => {
+    try {
+        let announcements = await readJson('announcements.json');
+        const codeUpper = couponCode ? couponCode.toUpperCase() : '';
+        announcements = announcements.filter(a => !(a.couponId === couponId || (codeUpper && (a.couponCode === codeUpper || a.text?.toUpperCase().startsWith(codeUpper)))));
+        await writeJson('announcements.json', announcements);
+    } catch (e) {
+        console.error("Error deleting coupon announcement:", e);
+    }
+};
+
+// GET all medicine coupons
+app.get('/api/coupons/medicine', async (req, res) => {
+    try {
+        const coupons = await readJson('medicine_coupons.json');
+        res.json(coupons);
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Error fetching medicine coupons" });
+    }
+});
+
+// POST new medicine coupon
+app.post('/api/coupons/medicine', async (req, res) => {
+    try {
+        const { code, discount, discountType, minOrder, maxDiscount, validFrom, validTo, description, isActive } = req.body;
+        const codeUpper = code ? code.toUpperCase() : '';
+        const discNum = Number(discount) || 0;
+        const discStr = (discountType === 'percentage' || discountType === '%') ? `${discNum}% OFF` : `₹${discNum} OFF`;
+
+        let autoDesc = description;
+        if (!autoDesc) {
+            autoDesc = `${codeUpper}: Get ${discStr} on Medicines!`;
+            const details = [];
+            if (minOrder && Number(minOrder) > 0) details.push(`Min Order ₹${minOrder}`);
+            if ((discountType === 'percentage' || discountType === '%') && maxDiscount && Number(maxDiscount) > 0) details.push(`Max Discount ₹${maxDiscount}`);
+            if (validTo) details.push(`Valid till ${validTo}`);
+            if (details.length > 0) autoDesc += ` (${details.join(', ')})`;
+        } else if (!autoDesc.toUpperCase().startsWith(codeUpper)) {
+            autoDesc = `${codeUpper}: ${autoDesc}`;
+        }
+
+        const newCoupon = {
+            id: crypto.randomUUID(),
+            code: codeUpper,
+            discount: discNum,
+            discountType: discountType || 'percentage',
+            minOrder: Number(minOrder) || 0,
+            maxDiscount: Number(maxDiscount) || 0,
+            validFrom,
+            validTo,
+            description: autoDesc,
+            isActive: isActive !== false,
+            createdAt: new Date().toISOString()
+        };
+        let coupons = await readJson('medicine_coupons.json');
+        coupons.unshift(newCoupon);
+        await writeJson('medicine_coupons.json', coupons);
+        
+        await syncCouponToAnnouncement(newCoupon, 'Medicines');
+        await addUserNotification('all', 'coupon', 'New Coupon Available', autoDesc);
+        
+        res.json({ success: true, coupon: newCoupon });
+    } catch (error) {
+        console.error("Error adding medicine coupon:", error);
+        res.status(500).json({ success: false, message: "Failed to add medicine coupon" });
+    }
+});
+
+// PATCH update medicine coupon
+app.patch('/api/coupons/medicine', async (req, res) => {
+    try {
+        const { id, ...updates } = req.body;
+        let coupons = await readJson('medicine_coupons.json');
+        const index = coupons.findIndex(c => c.id === id);
+        if (index === -1) return res.status(404).json({ success: false, message: "Coupon not found" });
+        if (updates.code) updates.code = updates.code.toUpperCase();
+        if (updates.discount) updates.discount = Number(updates.discount);
+        if (updates.minOrder) updates.minOrder = Number(updates.minOrder);
+        if (updates.maxDiscount) updates.maxDiscount = Number(updates.maxDiscount);
+
+        const targetCode = updates.code || coupons[index].code;
+        const targetDiscount = updates.discount !== undefined ? updates.discount : coupons[index].discount;
+        const targetDiscType = updates.discountType || coupons[index].discountType;
+        const targetMin = updates.minOrder !== undefined ? updates.minOrder : coupons[index].minOrder;
+        const targetMax = updates.maxDiscount !== undefined ? updates.maxDiscount : coupons[index].maxDiscount;
+        const targetValidTo = updates.validTo !== undefined ? updates.validTo : coupons[index].validTo;
+
+        if (updates.description !== undefined && updates.description !== '') {
+            if (!updates.description.toUpperCase().startsWith(targetCode.toUpperCase())) {
+                updates.description = `${targetCode.toUpperCase()}: ${updates.description}`;
+            }
+        } else {
+            const discStr = (targetDiscType === 'percentage' || targetDiscType === '%') ? `${targetDiscount}% OFF` : `₹${targetDiscount} OFF`;
+            let autoDesc = `${targetCode.toUpperCase()}: Get ${discStr} on Medicines!`;
+            const details = [];
+            if (targetMin && Number(targetMin) > 0) details.push(`Min Order ₹${targetMin}`);
+            if ((targetDiscType === 'percentage' || targetDiscType === '%') && targetMax && Number(targetMax) > 0) details.push(`Max Discount ₹${targetMax}`);
+            if (targetValidTo) details.push(`Valid till ${targetValidTo}`);
+            if (details.length > 0) autoDesc += ` (${details.join(', ')})`;
+            updates.description = autoDesc;
+        }
+
+        coupons[index] = { ...coupons[index], ...updates };
+        await writeJson('medicine_coupons.json', coupons);
+        await syncCouponToAnnouncement(coupons[index], 'Medicines');
+        res.json({ success: true, coupon: coupons[index] });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Failed to update medicine coupon" });
+    }
+});
+
+// DELETE medicine coupon
+app.delete('/api/coupons/medicine/:id', async (req, res) => {
+    try {
+        let coupons = await readJson('medicine_coupons.json');
+        const target = coupons.find(c => c.id === req.params.id);
+        coupons = coupons.filter(c => c.id !== req.params.id);
+        await writeJson('medicine_coupons.json', coupons);
+        if (target) {
+            await deleteCouponAnnouncement(target.id, target.code);
+        }
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Failed to delete medicine coupon" });
+    }
+});
+
+// GET all pathology coupons
+app.get('/api/coupons/pathology', async (req, res) => {
+    try {
+        const coupons = await readJson('pathology_coupons.json');
+        res.json(coupons);
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Error fetching pathology coupons" });
+    }
+});
+
+// POST new pathology coupon
+app.post('/api/coupons/pathology', async (req, res) => {
+    try {
+        const { code, discount, discountType, minOrder, maxDiscount, validFrom, validTo, description, isActive } = req.body;
+        const codeUpper = code ? code.toUpperCase() : '';
+        const discNum = Number(discount) || 0;
+        const discStr = (discountType === 'percentage' || discountType === '%') ? `${discNum}% OFF` : `₹${discNum} OFF`;
+
+        let autoDesc = description;
+        if (!autoDesc) {
+            autoDesc = `${codeUpper}: Get ${discStr} on Pathology Tests!`;
+            const details = [];
+            if (minOrder && Number(minOrder) > 0) details.push(`Min Order ₹${minOrder}`);
+            if ((discountType === 'percentage' || discountType === '%') && maxDiscount && Number(maxDiscount) > 0) details.push(`Max Discount ₹${maxDiscount}`);
+            if (validTo) details.push(`Valid till ${validTo}`);
+            if (details.length > 0) autoDesc += ` (${details.join(', ')})`;
+        } else if (!autoDesc.toUpperCase().startsWith(codeUpper)) {
+            autoDesc = `${codeUpper}: ${autoDesc}`;
+        }
+
+        const newCoupon = {
+            id: crypto.randomUUID(),
+            code: codeUpper,
+            discount: discNum,
+            discountType: discountType || 'percentage',
+            minOrder: Number(minOrder) || 0,
+            maxDiscount: Number(maxDiscount) || 0,
+            validFrom,
+            validTo,
+            description: autoDesc,
+            isActive: isActive !== false,
+            createdAt: new Date().toISOString()
+        };
+        let coupons = await readJson('pathology_coupons.json');
+        coupons.unshift(newCoupon);
+        await writeJson('pathology_coupons.json', coupons);
+        
+        await syncCouponToAnnouncement(newCoupon, 'Pathology Tests');
+        await addUserNotification('all', 'coupon', 'New Coupon Available', autoDesc);
+        
+        res.json({ success: true, coupon: newCoupon });
+    } catch (error) {
+        console.error("Error adding pathology coupon:", error);
+        res.status(500).json({ success: false, message: "Failed to add pathology coupon" });
+    }
+});
+
+// PATCH update pathology coupon
+app.patch('/api/coupons/pathology', async (req, res) => {
+    try {
+        const { id, ...updates } = req.body;
+        let coupons = await readJson('pathology_coupons.json');
+        const index = coupons.findIndex(c => c.id === id);
+        if (index === -1) return res.status(404).json({ success: false, message: "Coupon not found" });
+        if (updates.code) updates.code = updates.code.toUpperCase();
+        if (updates.discount) updates.discount = Number(updates.discount);
+        if (updates.minOrder) updates.minOrder = Number(updates.minOrder);
+        if (updates.maxDiscount) updates.maxDiscount = Number(updates.maxDiscount);
+
+        const targetCode = updates.code || coupons[index].code;
+        const targetDiscount = updates.discount !== undefined ? updates.discount : coupons[index].discount;
+        const targetDiscType = updates.discountType || coupons[index].discountType;
+        const targetMin = updates.minOrder !== undefined ? updates.minOrder : coupons[index].minOrder;
+        const targetMax = updates.maxDiscount !== undefined ? updates.maxDiscount : coupons[index].maxDiscount;
+        const targetValidTo = updates.validTo !== undefined ? updates.validTo : coupons[index].validTo;
+
+        if (updates.description !== undefined && updates.description !== '') {
+            if (!updates.description.toUpperCase().startsWith(targetCode.toUpperCase())) {
+                updates.description = `${targetCode.toUpperCase()}: ${updates.description}`;
+            }
+        } else {
+            const discStr = (targetDiscType === 'percentage' || targetDiscType === '%') ? `${targetDiscount}% OFF` : `₹${targetDiscount} OFF`;
+            let autoDesc = `${targetCode.toUpperCase()}: Get ${discStr} on Pathology Tests!`;
+            const details = [];
+            if (targetMin && Number(targetMin) > 0) details.push(`Min Order ₹${targetMin}`);
+            if ((targetDiscType === 'percentage' || targetDiscType === '%') && targetMax && Number(targetMax) > 0) details.push(`Max Discount ₹${targetMax}`);
+            if (targetValidTo) details.push(`Valid till ${targetValidTo}`);
+            if (details.length > 0) autoDesc += ` (${details.join(', ')})`;
+            updates.description = autoDesc;
+        }
+
+        coupons[index] = { ...coupons[index], ...updates };
+        await writeJson('pathology_coupons.json', coupons);
+        await syncCouponToAnnouncement(coupons[index], 'Pathology Tests');
+        res.json({ success: true, coupon: coupons[index] });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Failed to update pathology coupon" });
+    }
+});
+
+// DELETE pathology coupon
+app.delete('/api/coupons/pathology/:id', async (req, res) => {
+    try {
+        let coupons = await readJson('pathology_coupons.json');
+        const target = coupons.find(c => c.id === req.params.id);
+        coupons = coupons.filter(c => c.id !== req.params.id);
+        await writeJson('pathology_coupons.json', coupons);
+        if (target) {
+            await deleteCouponAnnouncement(target.id, target.code);
+        }
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Failed to delete pathology coupon" });
     }
 });
 
