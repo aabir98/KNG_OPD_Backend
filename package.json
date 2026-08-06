@@ -13,8 +13,10 @@
   "type": "commonjs",
   "dependencies": {
     "cors": "^2.8.6",
+    "crypto": "^1.0.1",
     "express": "^5.2.1",
     "multer": "^2.2.0",
+    "razorpay": "^2.9.8",
     "swagger-jsdoc": "^6.3.0",
     "swagger-ui-express": "^5.0.1"
   }

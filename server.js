@@ -4,7 +4,13 @@ const multer = require('multer');
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const Razorpay = require('razorpay');
 const swaggerUi = require('swagger-ui-express');
+
+const razorpay = new Razorpay({
+  key_id: "rzp_test_TMcZxvkXaGAFoK",
+  key_secret: "dXM8BdSmQE8KFnr8CndGadDg"
+});
 const swaggerDocument = require('./swagger.json');
 
 const app = express();
@@ -440,6 +446,42 @@ app.delete('/api/doctors', async (req, res) => {
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ success: false, message: 'Failed to delete doctor' });
+    }
+});
+
+// ---------------------------------------------------------
+// RAZORPAY ROUTES
+// ---------------------------------------------------------
+app.post('/api/create-order', async (req, res) => {
+    try {
+        const options = {
+            amount: 1 * 100, // Rs 1
+            currency: "INR",
+            receipt: "receipt_" + Math.random().toString(36).substring(7)
+        };
+        const order = await razorpay.orders.create(options);
+        res.json({ success: true, order });
+    } catch (error) {
+        console.error("Razorpay order error:", error);
+        res.status(500).json({ success: false, message: "Error creating order" });
+    }
+});
+
+app.post('/api/verify-payment', async (req, res) => {
+    try {
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+        const sign = razorpay_order_id + "|" + razorpay_payment_id;
+        const expectedSign = crypto.createHmac("sha256", "dXM8BdSmQE8KFnr8CndGadDg")
+                                   .update(sign.toString())
+                                   .digest("hex");
+
+        if (razorpay_signature === expectedSign) {
+            return res.json({ success: true, message: "Payment verified successfully" });
+        } else {
+            return res.status(400).json({ success: false, message: "Invalid signature sent!" });
+        }
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Error verifying payment" });
     }
 });
 
