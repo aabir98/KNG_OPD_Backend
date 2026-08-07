@@ -21,6 +21,10 @@ jobs:
             # Pull the latest changes from GitHub
             git pull origin main
             
+            # Securely inject Razorpay keys into .env file
+            echo "RAZORPAY_KEY_ID=${{ secrets.RAZORPAY_KEY_ID }}" > .env
+            echo "RAZORPAY_KEY_SECRET=${{ secrets.RAZORPAY_KEY_SECRET }}" >> .env
+            
             # Install any new dependencies
             npm install
             

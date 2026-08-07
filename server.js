@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -8,8 +9,8 @@ const Razorpay = require('razorpay');
 const swaggerUi = require('swagger-ui-express');
 
 const razorpay = new Razorpay({
-  key_id: "rzp_test_TMcZxvkXaGAFoK",
-  key_secret: "dXM8BdSmQE8KFnr8CndGadDg"
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET
 });
 const swaggerDocument = require('./swagger.json');
 
@@ -529,7 +530,7 @@ app.post('/api/verify-payment', async (req, res) => {
     try {
         const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
         const sign = razorpay_order_id + "|" + razorpay_payment_id;
-        const expectedSign = crypto.createHmac("sha256", "dXM8BdSmQE8KFnr8CndGadDg")
+        const expectedSign = crypto.createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
                                    .update(sign.toString())
                                    .digest("hex");
 
