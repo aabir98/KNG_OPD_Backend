@@ -9,8 +9,8 @@ const Razorpay = require('razorpay');
 const swaggerUi = require('swagger-ui-express');
 
 const razorpay = new Razorpay({
-    key_id: "rzp_live_TN2NYyCgJVpg7x", // HARDCODED LIVE KEY
-    key_secret: "oG8o0DaR5UbLtLGzpYeRv3b3" // HARDCODED LIVE SECRET
+    key_id: "rzp_live_TN3sscaEW0fMq4", // HARDCODED LIVE KEY
+    key_secret: "fyqlb2MLFkdkk1sH3BpkkXLB" // HARDCODED LIVE SECRET
 });
 const swaggerDocument = require('./swagger.json');
 
