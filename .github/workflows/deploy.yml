@@ -1,0 +1,28 @@
+name: Deploy Backend to Lightsail
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.LIGHTSAIL_HOST }}
+          username: ${{ secrets.LIGHTSAIL_USERNAME }}
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          script: |
+            # Navigate to the backend directory
+            cd ~/KNG_OPD_Backend
+            
+            # Pull the latest changes from GitHub
+            git pull origin main
+            
+            # Install any new dependencies
+            npm install
+            
+            # Restart the server using PM2
+            pm2 restart server.js || pm2 restart all
