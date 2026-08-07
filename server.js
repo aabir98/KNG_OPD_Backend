@@ -35,17 +35,74 @@ Promise.all([
 const upload = multer({ dest: TEMP_DIR });
 
 // Utilities
+const sqlite3 = require('sqlite3').verbose();
+const { open } = require('sqlite');
+let dbPromise = open({ filename: path.join(__dirname, 'data', 'database.sqlite'), driver: sqlite3.Database });
+
+const JSON_FIELDS = {
+    bookings: ['selectedTests'], doctors: ['availableDays', 'availableWeeks'], events: ['images'],
+    medicine_orders: ['patientDetails', 'items', 'cart'], notifications: ['details'], user_notifications: ['readBy', 'clearedBy']
+};
+const BOOLEAN_FIELDS = {
+    announcements: ['isActive'], doctors: ['useDummyRating'], medicines: ['inStock', 'isPrescriptionRequired'],
+    medicine_coupons: ['isActive'], pathology_coupons: ['isActive'], reviews: ['featured'], user_notifications: ['isRead']
+};
+
 async function readJson(filename) {
+    const table = filename.replace('.json', '');
     try {
-        const data = await fs.readFile(path.join(DATA_DIR, filename), 'utf-8');
-        return JSON.parse(data);
+        const db = await dbPromise;
+        const rows = await db.all('SELECT * FROM ' + table);
+        return rows.map(row => {
+            const parsed = { ...row };
+            if (JSON_FIELDS[table]) {
+                for (const field of JSON_FIELDS[table]) {
+                    if (parsed[field]) try { parsed[field] = JSON.parse(parsed[field]); } catch(e){}
+                }
+            }
+            if (BOOLEAN_FIELDS[table]) {
+                for (const field of BOOLEAN_FIELDS[table]) {
+                    if (parsed[field] !== null && parsed[field] !== undefined) parsed[field] = parsed[field] === 1;
+                }
+            }
+            return parsed;
+        });
     } catch (e) {
+        console.error('Error reading from sqlite:', e);
         return [];
     }
 }
 
 async function writeJson(filename, data) {
-    await fs.writeFile(path.join(DATA_DIR, filename), JSON.stringify(data, null, 2), 'utf-8');
+    const table = filename.replace('.json', '');
+    try {
+        const db = await dbPromise;
+        const tableInfo = await db.all('PRAGMA table_info(' + table + ')');
+        const validColumns = tableInfo.map(c => c.name);
+        
+        await db.run('BEGIN TRANSACTION');
+        await db.run('DELETE FROM ' + table);
+        
+        for (const row of data) {
+            const keys = Object.keys(row).filter(k => validColumns.includes(k));
+            if (keys.length === 0) continue;
+            
+            const values = keys.map(k => {
+                let val = row[k];
+                if (typeof val === 'boolean') return val ? 1 : 0;
+                if (typeof val === 'object' && val !== null) return JSON.stringify(val);
+                return val;
+            });
+            const placeholders = keys.map(() => '?').join(', ');
+            const cols = keys.map(k => `"${k}"`).join(', ');
+            await db.run(`INSERT INTO ${table} (${cols}) VALUES (${placeholders})`, ...values);
+        }
+        await db.run('COMMIT');
+    } catch(e) {
+        console.error('Error writing to sqlite:', e);
+        const db = await dbPromise;
+        await db.run('ROLLBACK').catch(()=>"");
+    }
 }
 
 async function addUserNotification(phone, type, title, message) {
