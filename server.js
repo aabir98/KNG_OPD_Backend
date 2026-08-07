@@ -9,8 +9,8 @@ const Razorpay = require('razorpay');
 const swaggerUi = require('swagger-ui-express');
 
 const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET
+    key_id: "rzp_live_TN2NYyCgJVpg7x", // HARDCODED LIVE KEY
+    key_secret: "oG8o0DaR5UbLtLGzpYeRv3b3" // HARDCODED LIVE SECRET
 });
 const swaggerDocument = require('./swagger.json');
 
@@ -59,7 +59,7 @@ async function readJson(filename) {
             const parsed = { ...row };
             if (JSON_FIELDS[table]) {
                 for (const field of JSON_FIELDS[table]) {
-                    if (parsed[field]) try { parsed[field] = JSON.parse(parsed[field]); } catch(e){}
+                    if (parsed[field]) try { parsed[field] = JSON.parse(parsed[field]); } catch (e) { }
                 }
             }
             if (BOOLEAN_FIELDS[table]) {
@@ -81,14 +81,14 @@ async function writeJson(filename, data) {
         const db = await dbPromise;
         const tableInfo = await db.all('PRAGMA table_info(' + table + ')');
         const validColumns = tableInfo.map(c => c.name);
-        
+
         await db.run('BEGIN TRANSACTION');
         await db.run('DELETE FROM ' + table);
-        
+
         for (const row of data) {
             const keys = Object.keys(row).filter(k => validColumns.includes(k));
             if (keys.length === 0) continue;
-            
+
             const values = keys.map(k => {
                 let val = row[k];
                 if (typeof val === 'boolean') return val ? 1 : 0;
@@ -100,10 +100,10 @@ async function writeJson(filename, data) {
             await db.run(`INSERT INTO ${table} (${cols}) VALUES (${placeholders})`, ...values);
         }
         await db.run('COMMIT');
-    } catch(e) {
+    } catch (e) {
         console.error('Error writing to sqlite:', e);
         const db = await dbPromise;
-        await db.run('ROLLBACK').catch(()=>"");
+        await db.run('ROLLBACK').catch(() => "");
     }
 }
 
@@ -157,17 +157,17 @@ app.get('/api/user/notifications', async (req, res) => {
     try {
         const { phone } = req.query;
         let notifications = await readJson('user_notifications.json');
-        
+
         // Filter: global ("all") OR matching phone
         notifications = notifications.filter(n => {
             const isTarget = n.phone === 'all' || (phone && n.phone === phone);
             const isCleared = n.clearedBy && n.clearedBy.includes(phone || 'guest');
             return isTarget && !isCleared;
         });
-        
+
         // Sort newest first
         notifications.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-        
+
         res.json({ success: true, notifications });
     } catch (error) {
         console.error("Error fetching user notifications:", error);
@@ -179,10 +179,10 @@ app.post('/api/user/notifications/read', async (req, res) => {
     try {
         const { id, phone } = req.body;
         if (!id || !phone) return res.status(400).json({ success: false, message: 'Missing id or phone' });
-        
+
         let notifications = await readJson('user_notifications.json');
         let index = notifications.findIndex(n => n.id === id);
-        
+
         if (index !== -1) {
             if (notifications[index].phone === 'all') {
                 if (!notifications[index].readBy) notifications[index].readBy = [];
@@ -194,7 +194,7 @@ app.post('/api/user/notifications/read', async (req, res) => {
             }
             await writeJson('user_notifications.json', notifications);
         }
-        
+
         res.json({ success: true });
     } catch (error) {
         console.error("Error marking notification as read:", error);
@@ -207,9 +207,9 @@ app.post('/api/user/notifications/clear', async (req, res) => {
     try {
         const { id, phone, clearAll } = req.body;
         if (!phone) return res.status(400).json({ success: false, message: 'Missing phone' });
-        
+
         let notifications = await readJson('user_notifications.json');
-        
+
         if (clearAll) {
             // Clear all notifications for this phone
             notifications = notifications.filter(n => {
@@ -233,7 +233,7 @@ app.post('/api/user/notifications/clear', async (req, res) => {
                 }
             }
         }
-        
+
         await writeJson('user_notifications.json', notifications);
         res.json({ success: true });
     } catch (error) {
@@ -274,9 +274,9 @@ app.post('/api/announcement', async (req, res) => {
 
         announcements.unshift(newAnnouncement);
         await writeJson('announcements.json', announcements);
-        
+
         await addUserNotification('all', 'announcement', 'New Announcement', text);
-        
+
         res.json({ success: true, announcement: newAnnouncement, announcements });
     } catch (error) {
         res.status(500).json({ success: false, message: 'Failed to update announcement' });
@@ -353,13 +353,13 @@ app.patch('/api/notifications/read', async (req, res) => {
     try {
         const { id, markAll } = req.body;
         let notifications = await readJson('notifications.json');
-        
+
         if (markAll) {
             notifications = notifications.map(n => ({ ...n, isRead: true }));
         } else if (id) {
             notifications = notifications.map(n => n.id === id ? { ...n, isRead: true } : n);
         }
-        
+
         await writeJson('notifications.json', notifications);
         const unreadCount = notifications.filter(n => !n.isRead).length;
         res.json({ success: true, notifications, unreadCount });
@@ -372,13 +372,13 @@ app.delete('/api/notifications', async (req, res) => {
     try {
         const { id, deleteAll } = req.query;
         let notifications = await readJson('notifications.json');
-        
+
         if (deleteAll === 'true') {
             notifications = [];
         } else if (id) {
             notifications = notifications.filter(n => n.id !== id);
         }
-        
+
         await writeJson('notifications.json', notifications);
         res.json({ success: true, notifications, unreadCount: 0 });
     } catch (error) {
@@ -404,20 +404,20 @@ app.post('/api/doctors', upload.single('image'), async (req, res) => {
         let imageurl = req.body.imageurl;
         let availableDays = [];
         let availableWeeks = [];
-        try { if (req.body.availableDays) availableDays = JSON.parse(req.body.availableDays); } catch(e){}
-        try { if (req.body.availableWeeks) availableWeeks = JSON.parse(req.body.availableWeeks); } catch(e){}
+        try { if (req.body.availableDays) availableDays = JSON.parse(req.body.availableDays); } catch (e) { }
+        try { if (req.body.availableWeeks) availableWeeks = JSON.parse(req.body.availableWeeks); } catch (e) { }
 
         if (req.file) {
             const uploadDir = path.join(PUBLIC_DIR, 'doctors');
             await fs.mkdir(uploadDir, { recursive: true });
-            
+
             const ext = req.file.originalname.split('.').pop() || 'png';
             const filename = `doc_${Date.now()}.${ext}`;
             const filePath = path.join(uploadDir, filename);
-            
+
             await fs.copyFile(req.file.path, filePath);
             await fs.unlink(req.file.path);
-            
+
             imageurl = `/doctors/${filename}`;
         }
 
@@ -462,25 +462,25 @@ app.patch('/api/doctors', upload.single('image'), async (req, res) => {
         if (experience !== undefined) doctor.experience = experience;
         if (req.body.dummyRating !== undefined) doctor.dummyRating = req.body.dummyRating;
         if (req.body.useDummyRating !== undefined) doctor.useDummyRating = req.body.useDummyRating === 'true';
-        
+
         if (req.body.availableDays) {
-            try { doctor.availableDays = JSON.parse(req.body.availableDays); } catch(e){}
+            try { doctor.availableDays = JSON.parse(req.body.availableDays); } catch (e) { }
         }
         if (req.body.availableWeeks) {
-            try { doctor.availableWeeks = JSON.parse(req.body.availableWeeks); } catch(e){}
+            try { doctor.availableWeeks = JSON.parse(req.body.availableWeeks); } catch (e) { }
         }
 
         if (req.file) {
             const uploadDir = path.join(PUBLIC_DIR, 'doctors');
             await fs.mkdir(uploadDir, { recursive: true });
-            
+
             const ext = req.file.originalname.split('.').pop() || 'png';
             const filename = `doc_${Date.now()}.${ext}`;
             const filePath = path.join(uploadDir, filename);
-            
+
             await fs.copyFile(req.file.path, filePath);
             await fs.unlink(req.file.path);
-            
+
             doctor.imageurl = `/doctors/${filename}`;
         }
 
@@ -500,7 +500,7 @@ app.delete('/api/doctors', async (req, res) => {
 
         const doctors = await readJson('doctors.json');
         const filtered = doctors.filter(d => d.id !== id && String(d.id) !== id);
-        
+
         await writeJson('doctors.json', filtered);
         res.json({ success: true });
     } catch (error) {
@@ -531,8 +531,8 @@ app.post('/api/verify-payment', async (req, res) => {
         const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
         const sign = razorpay_order_id + "|" + razorpay_payment_id;
         const expectedSign = crypto.createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
-                                   .update(sign.toString())
-                                   .digest("hex");
+            .update(sign.toString())
+            .digest("hex");
 
         if (razorpay_signature === expectedSign) {
             return res.json({ success: true, message: "Payment verified successfully" });
@@ -551,19 +551,19 @@ app.post('/api/submit', upload.single('prescription'), async (req, res) => {
     try {
         let data = req.body;
         if (typeof req.body.bookingData === 'string') {
-            try { data = JSON.parse(req.body.bookingData); } catch (e) {}
+            try { data = JSON.parse(req.body.bookingData); } catch (e) { }
         }
-        
+
         const timestamp = new Date().toISOString();
         const GOOGLE_SHEET_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbzpYuGb1FPCr3JU_AZHOXzJaRt6gupkw9NX3w9Xr4I4_2O4xGBIF_G9-loZ7OGqQd5T/exec";
-        
+
         let bookings = await readJson('bookings.json');
-        
+
         const isPathology = data.type === "Home Collection Request";
         const prefix = isPathology ? "RAY-PAT-" : "RAY-DOC-";
         let bookingNumber = "";
         let isUnique = false;
-        
+
         while (!isUnique) {
             const randomNumber = Math.floor(1000 + Math.random() * 9000).toString();
             bookingNumber = prefix + randomNumber;
@@ -612,7 +612,7 @@ app.post('/api/submit', upload.single('prescription'), async (req, res) => {
                 details: { bookingNumber, name: data.name, doctor: data.doctor, date: data.date, phone: data.phone }
             });
         }
-        
+
         await addUserNotification(data.userPhone || data.phone || 'all', 'order_placed', 'Booking Confirmed', `Your ${isPathology ? 'Pathology' : 'Doctor'} booking (${bookingNumber}) has been confirmed.`);
 
         try {
@@ -667,7 +667,7 @@ app.get('/api/bookings', async (req, res) => {
         const phone = req.query.phone;
         const id = req.query.id;
         const bookings = await readJson('bookings.json');
-        
+
         let filtered = bookings;
         if (id) {
             filtered = bookings.filter(b => b.id === id);
@@ -706,13 +706,13 @@ app.patch('/api/admin/bookings', async (req, res) => {
 
         let bookings = await readJson('bookings.json');
         let found = false;
-        
+
         bookings = bookings.map(b => {
             if (b.id === id) {
                 found = true;
-                return { 
-                    ...b, 
-                    ...(newDate && { date: newDate }), 
+                return {
+                    ...b,
+                    ...(newDate && { date: newDate }),
                     ...(status && { status }),
                     ...(selectedTests !== undefined && { selectedTests })
                 };
@@ -743,7 +743,7 @@ app.delete('/api/admin/bookings', async (req, res) => {
 
         let bookings = await readJson('bookings.json');
         let found = false;
-        
+
         bookings = bookings.map(b => {
             if (b.id === id) {
                 found = true;
@@ -774,9 +774,9 @@ app.post('/api/admin/bookings/upload', upload.single('file'), async (req, res) =
 
         await fs.copyFile(req.file.path, filePath);
         await fs.unlink(req.file.path);
-        
+
         const fileUrl = `/uploads/${filename}`;
-        
+
         let bookings = await readJson('bookings.json');
         let found = false;
         bookings = bookings.map(b => {
@@ -789,7 +789,7 @@ app.post('/api/admin/bookings/upload', upload.single('file'), async (req, res) =
         });
 
         if (!found) {
-            await fs.unlink(filePath).catch(()=>console.log);
+            await fs.unlink(filePath).catch(() => console.log);
             return res.status(404).json({ success: false, message: "Booking not found" });
         }
 
@@ -807,7 +807,7 @@ app.get('/api/users', async (req, res) => {
     try {
         const users = await readJson('users.json');
         const email = req.query.email;
-        
+
         if (email) {
             const user = users.find(u => u.email === email);
             if (user) {
@@ -816,7 +816,7 @@ app.get('/api/users', async (req, res) => {
                 return res.json({ success: false, message: "User not found" });
             }
         }
-        
+
         res.json({ success: true, users });
     } catch (error) {
         res.status(500).json({ success: false, message: "Failed to fetch users" });
@@ -827,7 +827,7 @@ app.post('/api/users', async (req, res) => {
     try {
         const data = req.body;
         let users = await readJson('users.json');
-        
+
         const existing = users.find(u => u.email === data.email);
         if (existing) {
             return res.json({ success: true, message: "Login successful", user: existing });
@@ -838,7 +838,7 @@ app.post('/api/users', async (req, res) => {
             ...data,
             createdAt: new Date().toISOString()
         };
-        
+
         users.push(newUser);
         await writeJson('users.json', users);
         res.json({ success: true, message: "User created", user: newUser });
@@ -853,10 +853,10 @@ app.put('/api/users', async (req, res) => {
         if (!email || !phone) {
             return res.status(400).json({ success: false, message: "Missing email or phone" });
         }
-        
+
         let users = await readJson('users.json');
         const userIndex = users.findIndex(u => u.email === email);
-        
+
         if (userIndex !== -1) {
             users[userIndex].phone = phone;
             await writeJson('users.json', users);
@@ -897,9 +897,9 @@ app.post('/api/reviews', async (req, res) => {
         if (reviewType === 'Doctor' && !doctorName) {
             return res.status(400).json({ success: false, message: "Doctor name required for doctor reviews" });
         }
-        
+
         let reviews = await readJson('reviews.json');
-        
+
         // Prevent duplicate reviews for the same booking
         if (reviews.find(r => r.bookingId === bookingId)) {
             return res.status(400).json({ success: false, message: "Review already exists for this booking" });
@@ -917,7 +917,7 @@ app.post('/api/reviews', async (req, res) => {
             text: text || "",
             createdAt: new Date().toISOString()
         };
-        
+
         reviews.push(newReview);
         await writeJson('reviews.json', reviews);
         res.json({ success: true, review: newReview });
@@ -930,7 +930,7 @@ app.patch('/api/reviews', async (req, res) => {
     try {
         const { id, text, featured } = req.body;
         if (!id) return res.status(400).json({ success: false, message: "Review ID required" });
-        
+
         let reviews = await readJson('reviews.json');
         const idx = reviews.findIndex(r => r.id === id);
         if (idx === -1) return res.status(404).json({ success: false, message: "Review not found" });
@@ -950,7 +950,7 @@ app.delete('/api/reviews', async (req, res) => {
     try {
         const id = req.query.id;
         if (!id) return res.status(400).json({ success: false, message: "Review ID required" });
-        
+
         let reviews = await readJson('reviews.json');
         reviews = reviews.filter(r => r.id !== id);
         await writeJson('reviews.json', reviews);
@@ -994,11 +994,11 @@ app.patch('/api/tests', async (req, res) => {
     try {
         const data = req.body;
         if (!data.id) return res.status(400).json({ success: false, message: "Test ID required" });
-        
+
         const tests = await readJson('tests.json');
         const idx = tests.findIndex(t => t.id === data.id);
         if (idx === -1) return res.status(404).json({ success: false, message: "Test not found" });
-        
+
         tests[idx] = { ...tests[idx], name: data.name, code: data.code };
         await writeJson('tests.json', tests);
         res.json({ success: true, test: tests[idx] });
@@ -1011,7 +1011,7 @@ app.delete('/api/tests', async (req, res) => {
     try {
         const id = req.query.id;
         if (!id) return res.status(400).json({ success: false, message: "Test ID required" });
-        
+
         let tests = await readJson('tests.json');
         tests = tests.filter(t => t.id !== id);
         await writeJson('tests.json', tests);
@@ -1079,7 +1079,7 @@ app.patch('/api/medicines', upload.single('image'), async (req, res) => {
         const medicines = await readJson('medicines.json');
         const idx = medicines.findIndex(m => m.id === id);
         if (idx === -1) return res.status(404).json({ success: false, message: "Medicine not found" });
-        
+
         let med = medicines[idx];
         if (name !== undefined) med.name = name;
         if (price !== undefined) med.price = Number(price) || 0;
@@ -1099,7 +1099,7 @@ app.patch('/api/medicines', upload.single('image'), async (req, res) => {
             await fs.unlink(req.file.path);
             med.imageurl = `/medicines/${filename}`;
         }
-        
+
         medicines[idx] = med;
         await writeJson('medicines.json', medicines);
         res.json({ success: true, medicine: med });
@@ -1112,7 +1112,7 @@ app.delete('/api/medicines', async (req, res) => {
     try {
         const id = req.query.id;
         if (!id) return res.status(400).json({ success: false, message: "Medicine ID required" });
-        
+
         let medicines = await readJson('medicines.json');
         medicines = medicines.filter(m => m.id !== id);
         await writeJson('medicines.json', medicines);
@@ -1182,7 +1182,7 @@ app.patch('/api/gallery', upload.single('image'), async (req, res) => {
         const items = await readJson('gallery.json');
         const idx = items.findIndex(i => i.id === id);
         if (idx === -1) return res.status(404).json({ success: false, message: "Item not found" });
-        
+
         let item = items[idx];
         if (title !== undefined) item.title = title;
         if (description !== undefined) item.description = description;
@@ -1202,7 +1202,7 @@ app.patch('/api/gallery', upload.single('image'), async (req, res) => {
             item.src = item.src || item.imageurl || '';
             item.imageurl = item.imageurl || item.src || '';
         }
-        
+
         items[idx] = item;
         await writeJson('gallery.json', items);
         res.json({ success: true, item });
@@ -1215,7 +1215,7 @@ app.delete('/api/gallery', async (req, res) => {
     try {
         const id = req.query.id;
         if (!id) return res.status(400).json({ success: false, message: "Gallery ID required" });
-        
+
         let items = await readJson('gallery.json');
         items = items.filter(i => i.id !== id);
         await writeJson('gallery.json', items);
@@ -1239,12 +1239,12 @@ app.get('/api/events', async (req, res) => {
 app.post('/api/events', upload.array('images', 10), async (req, res) => {
     try {
         const { title, date, details } = req.body;
-        
+
         let imageUrls = [];
         if (req.files && req.files.length > 0) {
             const uploadDir = path.join(PUBLIC_DIR, 'events');
             await fs.mkdir(uploadDir, { recursive: true });
-            
+
             for (let i = 0; i < req.files.length; i++) {
                 const file = req.files[i];
                 const filename = Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname);
@@ -1253,7 +1253,7 @@ app.post('/api/events', upload.array('images', 10), async (req, res) => {
                 imageUrls.push(`/events/${filename}`);
             }
         }
-        
+
         const newItem = {
             id: crypto.randomUUID(),
             title,
@@ -1262,13 +1262,13 @@ app.post('/api/events', upload.array('images', 10), async (req, res) => {
             images: imageUrls,
             createdAt: new Date().toISOString()
         };
-        
+
         let items = await readJson('events.json');
         items.unshift(newItem);
         await writeJson('events.json', items);
-        
+
         await addUserNotification('all', 'event', 'New Event', title);
-        
+
         res.json({ success: true, event: newItem });
     } catch (error) {
         console.error("Error in POST /api/events:", error);
@@ -1279,10 +1279,10 @@ app.post('/api/events', upload.array('images', 10), async (req, res) => {
 app.patch('/api/events', upload.array('images', 10), async (req, res) => {
     try {
         const { id, title, date, details, keepImages } = req.body;
-        
+
         let items = await readJson('events.json');
         const index = items.findIndex(i => i.id === id);
-        
+
         if (index === -1) {
             return res.status(404).json({ success: false, message: "Event not found" });
         }
@@ -1293,7 +1293,7 @@ app.patch('/api/events', upload.array('images', 10), async (req, res) => {
         if (keepImages) {
             try { keepArray = JSON.parse(keepImages); } catch (e) { keepArray = typeof keepImages === 'string' ? [keepImages] : keepImages || []; }
         }
-        
+
         const existingImages = items[index].images || [];
         for (const oldImg of existingImages) {
             if (keepArray.includes(oldImg)) {
@@ -1302,15 +1302,15 @@ app.patch('/api/events', upload.array('images', 10), async (req, res) => {
                 try {
                     const oldPath = path.join(PUBLIC_DIR, oldImg.replace('/events/', 'events/'));
                     await fs.unlink(oldPath);
-                } catch (e) {}
+                } catch (e) { }
             }
         }
-        
+
         // Add new images
         if (req.files && req.files.length > 0) {
             const uploadDir = path.join(PUBLIC_DIR, 'events');
             await fs.mkdir(uploadDir, { recursive: true });
-            
+
             for (let i = 0; i < req.files.length; i++) {
                 const file = req.files[i];
                 const filename = Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname);
@@ -1319,10 +1319,10 @@ app.patch('/api/events', upload.array('images', 10), async (req, res) => {
                 finalImages.push(`/events/${filename}`);
             }
         }
-        
+
         items[index] = { ...items[index], title, date, details, images: finalImages };
         await writeJson('events.json', items);
-        
+
         res.json({ success: true, event: items[index] });
     } catch (error) {
         res.status(500).json({ success: false, message: "Failed to update event" });
@@ -1334,16 +1334,16 @@ app.delete('/api/events', async (req, res) => {
         const { id } = req.query;
         let items = await readJson('events.json');
         const event = items.find(i => i.id === id);
-        
+
         if (event && event.images) {
             for (const img of event.images) {
                 try {
                     const imgPath = path.join(PUBLIC_DIR, img.replace('/events/', 'events/'));
                     await fs.unlink(imgPath);
-                } catch (e) {}
+                } catch (e) { }
             }
         }
-        
+
         items = items.filter(i => i.id !== id);
         await writeJson('events.json', items);
         res.json({ success: true });
@@ -1359,11 +1359,11 @@ app.post('/api/medicine-orders', upload.single('prescription'), async (req, res)
     try {
         let orderData = req.body;
         if (typeof req.body.orderData === 'string') {
-            try { orderData = JSON.parse(req.body.orderData); } catch (e) {}
+            try { orderData = JSON.parse(req.body.orderData); } catch (e) { }
         }
-        
+
         let orders = await readJson('medicine_orders.json');
-        
+
         // Generate a unique order number
         let orderNumber = "";
         let isUnique = false;
@@ -1397,7 +1397,7 @@ app.post('/api/medicine-orders', upload.single('prescription'), async (req, res)
 
         orders.unshift(newOrder);
         await writeJson('medicine_orders.json', orders);
-        
+
         await addNotification({
             type: "medicine_order",
             title: "New Medicine Order",
@@ -1419,11 +1419,11 @@ app.get('/api/medicine-orders', async (req, res) => {
     try {
         const phone = req.query.phone;
         let orders = await readJson('medicine_orders.json');
-        
+
         if (phone) {
             orders = orders.filter(o => (o.userPhone === phone || (o.patientDetails && o.patientDetails.phone === phone)) && o.status !== 'Deleted');
         }
-        
+
         res.json(orders);
     } catch (error) {
         res.status(500).json({ success: false, message: "Failed to fetch medicine orders" });
@@ -1434,7 +1434,7 @@ app.put('/api/medicine-orders', async (req, res) => {
     try {
         const { id, status } = req.body;
         if (!id || !status) return res.status(400).json({ success: false, message: 'Missing id or status' });
-        
+
         let orders = await readJson('medicine_orders.json');
         const index = orders.findIndex(o => o.id === id);
         if (index !== -1) {
@@ -1546,7 +1546,7 @@ const syncCouponToAnnouncement = async (coupon, serviceName) => {
         const codeUpper = coupon.code.toUpperCase();
         const discNum = Number(coupon.discount) || 0;
         const discStr = coupon.discountType === 'percentage' ? `${discNum}% OFF` : `₹${discNum} OFF`;
-        
+
         let desc = coupon.description;
         if (!desc) {
             desc = `${codeUpper}: Get ${discStr} on ${serviceName}!`;
@@ -1560,9 +1560,9 @@ const syncCouponToAnnouncement = async (coupon, serviceName) => {
         }
 
         let announcements = await readJson('announcements.json');
-        
-        const idx = announcements.findIndex(a => 
-            (a.couponId && a.couponId === coupon.id) || 
+
+        const idx = announcements.findIndex(a =>
+            (a.couponId && a.couponId === coupon.id) ||
             (a.couponCode && a.couponCode === codeUpper) ||
             (a.text && a.text.toUpperCase().startsWith(codeUpper))
         );
@@ -1648,10 +1648,10 @@ app.post('/api/coupons/medicine', async (req, res) => {
         let coupons = await readJson('medicine_coupons.json');
         coupons.unshift(newCoupon);
         await writeJson('medicine_coupons.json', coupons);
-        
+
         await syncCouponToAnnouncement(newCoupon, 'Medicines');
         await addUserNotification('all', 'coupon', 'New Coupon Available', autoDesc);
-        
+
         res.json({ success: true, coupon: newCoupon });
     } catch (error) {
         console.error("Error adding medicine coupon:", error);
@@ -1764,10 +1764,10 @@ app.post('/api/coupons/pathology', async (req, res) => {
         let coupons = await readJson('pathology_coupons.json');
         coupons.unshift(newCoupon);
         await writeJson('pathology_coupons.json', coupons);
-        
+
         await syncCouponToAnnouncement(newCoupon, 'Pathology Tests');
         await addUserNotification('all', 'coupon', 'New Coupon Available', autoDesc);
-        
+
         res.json({ success: true, coupon: newCoupon });
     } catch (error) {
         console.error("Error adding pathology coupon:", error);
