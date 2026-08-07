@@ -37,7 +37,8 @@ const upload = multer({ dest: TEMP_DIR });
 // Utilities
 const sqlite3 = require('sqlite3').verbose();
 const { open } = require('sqlite');
-let dbPromise = open({ filename: path.join(__dirname, 'data', 'database.sqlite'), driver: sqlite3.Database });
+const dbFilename = process.env.DB_PATH || path.join(__dirname, 'data', 'database.sqlite');
+let dbPromise = open({ filename: dbFilename, driver: sqlite3.Database });
 
 const JSON_FIELDS = {
     bookings: ['selectedTests'], doctors: ['availableDays', 'availableWeeks'], events: ['images'],
